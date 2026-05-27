@@ -15,4 +15,4 @@ const child = spawn(command, args, {
 
 child.unref()
 console.log(`Eatery MVP dev server started. PID: ${child.pid}`)
-console.log('Open: http://localhost:5173/?view=customer')
+console.log('Open: http://localhost:5173/')

@@ -125,20 +125,20 @@ execute function set_updated_at();
 
 -- Demo seed data
 insert into eateries (name, slug, address)
-values ('Demo Eatery', 'demo-eatery', 'Lagos, Nigeria')
+values ('Dine Flow', 'dine-flow', 'Lagos, Nigeria')
 on conflict (slug) do nothing;
 
 with demo as (
-  select id from eateries where slug = 'demo-eatery'
+  select id from eateries where slug = 'dine-flow'
 )
 insert into eatery_tables (eatery_id, label, seats)
 select demo.id, table_data.label, table_data.seats
 from demo,
-  (values ('Table 1', 2), ('Table 2', 4), ('Table 3', 4), ('VIP 1', 6)) as table_data(label, seats)
+  (values ('Table 1', 2), ('Table 2', 4), ('Table 3', 4), ('VIP 1', 6), ('Pickup Counter', 1), ('Delivery Dispatch', 1)) as table_data(label, seats)
 on conflict (eatery_id, label) do nothing;
 
 with demo as (
-  select id from eateries where slug = 'demo-eatery'
+  select id from eateries where slug = 'dine-flow'
 )
 insert into menu_items (eatery_id, name, category, description, price, prep_minutes, available)
 select demo.id, item.name, item.category, item.description, item.price, item.prep_minutes, true
@@ -157,15 +157,15 @@ where not exists (
 
 -- Pre-generated hashes for password ChangeMe123!
 with demo as (
-  select id from eateries where slug = 'demo-eatery'
+  select id from eateries where slug = 'dine-flow'
 )
 insert into staff_members (eatery_id, email, full_name, role, password_hash, active)
 select demo.id, staff.email, staff.full_name, staff.role::staff_role, staff.password_hash, true
 from demo,
   (
     values
-      ('owner@demo-eatery.com', 'Demo Owner', 'owner', 'scrypt:63e174da6b191e83f23fa3c255d4de91:d0082932fa1e428e542099cfec2ed3ea5ac8ac6aa286b60ee1baded3a954a6d6d61daabf2aa8b88dc89c3a55c23c6f478001e1b191556f3f589a4c87c57146cf'),
-      ('kitchen@demo-eatery.com', 'Demo Kitchen', 'kitchen', 'scrypt:5415e35b68d64f8aec7acaf4a82d37e1:501e3518bd96c73b3e81348fac7c8c91ff4c2fd8ab38cf31df64221310d313cdd34953189cac57ae5657d79f6074a7891f1f4176a03a01876ebf1943b80a4666')
+      ('owner@dineflow.com', 'Dine Flow Owner', 'owner', 'scrypt:63e174da6b191e83f23fa3c255d4de91:d0082932fa1e428e542099cfec2ed3ea5ac8ac6aa286b60ee1baded3a954a6d6d61daabf2aa8b88dc89c3a55c23c6f478001e1b191556f3f589a4c87c57146cf'),
+      ('kitchen@dineflow.com', 'Dine Flow Kitchen', 'kitchen', 'scrypt:5415e35b68d64f8aec7acaf4a82d37e1:501e3518bd96c73b3e81348fac7c8c91ff4c2fd8ab38cf31df64221310d313cdd34953189cac57ae5657d79f6074a7891f1f4176a03a01876ebf1943b80a4666')
   ) as staff(email, full_name, role, password_hash)
 where not exists (
   select 1

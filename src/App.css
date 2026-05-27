@@ -79,7 +79,9 @@ h3 {
 .hero-actions,
 .category-row,
 .order-actions,
-.qty-row {
+.qty-row,
+.guest-mode-toggle,
+.quick-actions-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -118,6 +120,7 @@ button:disabled {
 }
 
 .view-switcher button,
+.guest-mode-toggle button,
 .chip,
 .order-actions button,
 .admin-menu-row button {
@@ -126,9 +129,22 @@ button:disabled {
 }
 
 .view-switcher button.active,
+.guest-mode-toggle button.active,
 .chip.active {
   background: #ea580c;
   color: #fff;
+}
+
+.public-hero {
+  background:
+    radial-gradient(circle at top left, rgba(249, 115, 22, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(255, 247, 237, 0.72));
+}
+
+.staff-hero {
+  background:
+    radial-gradient(circle at top left, rgba(15, 23, 42, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.92));
 }
 
 .hero-grid {
@@ -296,6 +312,21 @@ label {
   gap: 14px;
 }
 
+.customer-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.customer-helper-note {
+  margin-top: 16px;
+}
+
 .cart-line {
   display: grid;
   gap: 10px;
@@ -419,7 +450,8 @@ code {
   .content-grid,
   .admin-grid,
   .order-board,
-  .menu-list {
+  .menu-list,
+  .customer-meta-grid {
     grid-template-columns: 1fr;
   }
 

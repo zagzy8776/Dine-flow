@@ -70,6 +70,8 @@ export const initialStore: Store = {
     { id: 'table-2', label: 'Table 2', seats: 4 },
     { id: 'table-3', label: 'Table 3', seats: 4 },
     { id: 'vip-1', label: 'VIP 1', seats: 6 },
+    { id: 'pickup-counter', label: 'Pickup Counter', seats: 1 },
+    { id: 'delivery-dispatch', label: 'Delivery Dispatch', seats: 1 },
   ],
   orders: [
     {
@@ -106,6 +108,10 @@ export function loadDemoStore(): Store {
 }
 
 export function getInitialView(): View {
+  const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
+  if (normalizedPath === '/kitchen') return 'kitchen'
+  if (normalizedPath === '/admin') return 'admin'
+
   const queryValue = new URLSearchParams(window.location.search).get('view')
   if (queryValue === 'customer' || queryValue === 'kitchen' || queryValue === 'admin') {
     return queryValue

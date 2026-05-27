@@ -47,8 +47,8 @@ Frontend:
 
 ```env
 VITE_API_BASE_URL=http://localhost:4000
-VITE_EATERY_SLUG=demo-eatery
-VITE_EATERY_NAME=Demo Eatery
+VITE_EATERY_SLUG=dine-flow
+VITE_EATERY_NAME=Dine Flow
 ```
 
 Backend:
@@ -76,8 +76,8 @@ This creates:
 
 Demo staff accounts seeded by the schema:
 
-- `owner@demo-eatery.com` / `ChangeMe123!`
-- `kitchen@demo-eatery.com` / `ChangeMe123!`
+- `owner@dineflow.com` / `ChangeMe123!`
+- `kitchen@dineflow.com` / `ChangeMe123!`
 
 ### 4. Run locally
 
@@ -104,16 +104,20 @@ Backend health: http://localhost:4000/healthz
 
 ```text
 Guest ordering:
-http://localhost:5173/?view=customer
+http://localhost:5173/
+
+Off-site ordering uses the same public customer page. Create service points like `Pickup Counter` or `Delivery Dispatch` in Admin so guests outside the eatery can order without being assigned to a dine-in table.
 
 Kitchen board:
-http://localhost:5173/?view=kitchen
+http://localhost:5173/kitchen
 
 Owner dashboard:
-http://localhost:5173/?view=admin
+http://localhost:5173/admin
 
 Example table link:
-http://localhost:5173/?view=customer&table=table-1
+http://localhost:5173/?table=table-1
+
+Legacy links with `?view=customer`, `?view=kitchen`, and `?view=admin` still work and are automatically normalized to the route paths above.
 ```
 
 ## Deploy to Vercel
@@ -133,8 +137,8 @@ Set Vercel environment variables:
 
 ```env
 VITE_API_BASE_URL=https://your-render-service.onrender.com
-VITE_EATERY_SLUG=demo-eatery
-VITE_EATERY_NAME=Demo Eatery
+VITE_EATERY_SLUG=dine-flow
+VITE_EATERY_NAME=Dine Flow
 ```
 
 `vercel.json` includes:
