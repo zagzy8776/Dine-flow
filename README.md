@@ -20,6 +20,9 @@ The frontend runs in two modes:
 ## Features
 
 - Guest table ordering
+- Customer order type flow for dine-in, pickup, and delivery
+- Pickup/delivery customer details and payment method selection
+- Customer order confirmation card after submission
 - Menu browsing by category
 - Cart with quantity and notes
 - Kitchen order board

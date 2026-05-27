@@ -43,7 +43,31 @@ const recommendedServicePoints = [
   { label: 'Delivery Dispatch', seats: 1 },
 ] as const
 
-type FulfillmentMode = 'dine-in' | 'offsite'
+type FulfillmentMode = 'dine-in' | 'pickup' | 'delivery'
+type PaymentMethod = 'counter' | 'transfer' | 'pos' | 'cash'
+
+type CustomerOrderSummary = {
+  id: string
+  tableId: string
+  tableLabel: string
+  fulfillmentMode: FulfillmentMode
+  customerName: string
+  total: number
+  createdAt: string
+}
+
+const fulfillmentLabels: Record<FulfillmentMode, string> = {
+  'dine-in': 'Dine-in',
+  pickup: 'Pickup',
+  delivery: 'Delivery',
+}
+
+const paymentLabels: Record<PaymentMethod, string> = {
+  counter: 'Pay at counter',
+  transfer: 'Bank transfer',
+  pos: 'POS on delivery / pickup',
+  cash: 'Cash',
+}
 
 function formatCurrency(value: number) {
   return `₦${new Intl.NumberFormat('en-NG').format(value)}`
@@ -101,28 +125,44 @@ function isOffsiteOrderingPoint(label: string) {
   return /(pickup|delivery|dispatch|takeaway|take-away|take away|online|collection)/i.test(label)
 }
 
+function isPickupOrderingPoint(label: string) {
+  return /(pickup|takeaway|take-away|take away|collection|counter)/i.test(label)
+}
+
+function isDeliveryOrderingPoint(label: string) {
+  return /(delivery|dispatch|rider|online)/i.test(label)
+}
+
 function buildGuestOrderNote(params: {
   fulfillmentMode: FulfillmentMode
   customerNote: string
   offsiteContact: string
   offsiteDetails: string
+  paymentMethod: PaymentMethod
 }) {
   const noteParts: string[] = []
 
-  if (params.fulfillmentMode === 'offsite') {
-    noteParts.push('Off-site guest order')
+  noteParts.push(`Order type: ${fulfillmentLabels[params.fulfillmentMode]}`)
+  noteParts.push(`Payment method: ${paymentLabels[params.paymentMethod]}`)
+
+  if (params.fulfillmentMode !== 'dine-in') {
+    noteParts.push(`${fulfillmentLabels[params.fulfillmentMode]} guest order`)
 
     if (params.offsiteContact.trim()) {
       noteParts.push(`Contact: ${params.offsiteContact.trim()}`)
     }
 
     if (params.offsiteDetails.trim()) {
-      noteParts.push(`Pickup / delivery details: ${params.offsiteDetails.trim()}`)
+      noteParts.push(
+        params.fulfillmentMode === 'delivery'
+          ? `Delivery address / landmark: ${params.offsiteDetails.trim()}`
+          : `Pickup time / details: ${params.offsiteDetails.trim()}`,
+      )
     }
   }
 
   if (params.customerNote.trim()) {
-    noteParts.push(params.fulfillmentMode === 'offsite' ? `Customer note: ${params.customerNote.trim()}` : params.customerNote.trim())
+    noteParts.push(`Customer note: ${params.customerNote.trim()}`)
   }
 
   return noteParts.join('\n')
@@ -159,6 +199,8 @@ function App() {
   const [customerNote, setCustomerNote] = useState('')
   const [offsiteContact, setOffsiteContact] = useState('')
   const [offsiteDetails, setOffsiteDetails] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('counter')
+  const [lastCustomerOrder, setLastCustomerOrder] = useState<CustomerOrderSummary | null>(null)
   const [cart, setCart] = useState<CartLine[]>([])
   const [category, setCategory] = useState('All')
   const [toast, setToast] = useState('')
@@ -261,6 +303,14 @@ function App() {
   const canViewAdminContent = mode === 'demo' || canManage
   const customerViewTableOptions = useMemo(() => store.tables.filter((table) => !isOffsiteOrderingPoint(table.label)), [store.tables])
   const offsiteOrderingOptions = useMemo(() => store.tables.filter((table) => isOffsiteOrderingPoint(table.label)), [store.tables])
+  const pickupOrderingOptions = useMemo(
+    () => store.tables.filter((table) => isPickupOrderingPoint(table.label)),
+    [store.tables],
+  )
+  const deliveryOrderingOptions = useMemo(
+    () => store.tables.filter((table) => isDeliveryOrderingPoint(table.label)),
+    [store.tables],
+  )
 
   const filteredMenu = useMemo(
     () => store.menu.filter((item) => activeCategory === 'All' || item.category === activeCategory),
@@ -307,7 +357,8 @@ function App() {
     return [...counts.values()].sort((left, right) => right.quantity - left.quantity)[0] ?? null
   }, [store.orders])
   const defaultDineInTableId = customerViewTableOptions[0]?.id ?? ''
-  const defaultOffsiteTableId = offsiteOrderingOptions[0]?.id ?? ''
+  const defaultPickupTableId = pickupOrderingOptions[0]?.id ?? offsiteOrderingOptions[0]?.id ?? ''
+  const defaultDeliveryTableId = deliveryOrderingOptions[0]?.id ?? offsiteOrderingOptions[0]?.id ?? ''
   const selectedTableLink = selectedTable ? buildTableLink(selectedTable.id) : buildTableLink('')
 
   useEffect(() => {
@@ -360,15 +411,24 @@ function App() {
   async function submitOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
+    const customerNameValue = customerName.trim()
+    const contactValue = offsiteContact.trim()
+    const detailsValue = offsiteDetails.trim()
+    const offsiteOptions = fulfillmentMode === 'delivery' ? deliveryOrderingOptions : pickupOrderingOptions
+    const fallbackOffsiteTable = fulfillmentMode === 'delivery' ? defaultDeliveryTableId : defaultPickupTableId
     const activeTable =
-      fulfillmentMode === 'offsite'
-        ? store.tables.find((table) => table.id === resolvedSelectedTableId && isOffsiteOrderingPoint(table.label)) ?? offsiteOrderingOptions[0]
-        : store.tables.find((table) => table.id === resolvedSelectedTableId && !isOffsiteOrderingPoint(table.label)) ?? customerViewTableOptions[0]
+      fulfillmentMode === 'dine-in'
+        ? store.tables.find((table) => table.id === resolvedSelectedTableId && !isOffsiteOrderingPoint(table.label)) ?? customerViewTableOptions[0]
+        : store.tables.find((table) => table.id === resolvedSelectedTableId && offsiteOptions.some((option) => option.id === table.id))
+          ?? store.tables.find((table) => table.id === fallbackOffsiteTable)
+          ?? offsiteOptions[0]
 
     if (!activeTable) {
       setToast(
-        fulfillmentMode === 'offsite'
-          ? 'Please create a Pickup Counter or Delivery Dispatch point in Admin before taking off-site orders.'
+        fulfillmentMode === 'delivery'
+          ? 'Please create a Delivery Dispatch service point in Admin before taking delivery orders.'
+          : fulfillmentMode === 'pickup'
+          ? 'Please create a Pickup Counter service point in Admin before taking pickup orders.'
           : 'Please create or select a dine-in table first.',
       )
       return
@@ -379,11 +439,27 @@ function App() {
       return
     }
 
+    if (fulfillmentMode !== 'dine-in' && !customerNameValue) {
+      setToast('Please enter your name for pickup or delivery orders.')
+      return
+    }
+
+    if (fulfillmentMode !== 'dine-in' && !contactValue) {
+      setToast('Please enter a phone number for pickup or delivery orders.')
+      return
+    }
+
+    if (fulfillmentMode === 'delivery' && !detailsValue) {
+      setToast('Please enter your delivery address.')
+      return
+    }
+
     const guestOrderNote = buildGuestOrderNote({
       fulfillmentMode,
       customerNote,
       offsiteContact,
       offsiteDetails,
+      paymentMethod,
     })
 
     if (mode === 'api') {
@@ -392,7 +468,7 @@ function App() {
         const result = await submitGuestOrder({
           slug: EATERY_SLUG,
           tableId: activeTable.id,
-          customerName: customerName.trim() || 'Guest',
+          customerName: customerNameValue || 'Guest',
           note: guestOrderNote || undefined,
           items: cartItems.map(({ menuItem, quantity, note }) => ({
             menuItemId: menuItem.id,
@@ -405,7 +481,16 @@ function App() {
         setCustomerNote('')
         setOffsiteContact('')
         setOffsiteDetails('')
-        setToast(`Order ${shortOrderId(result.orderId)} sent to kitchen for ${activeTable.label}.`)
+        setLastCustomerOrder({
+          id: result.orderId,
+          tableId: activeTable.id,
+          tableLabel: activeTable.label,
+          fulfillmentMode,
+          customerName: customerNameValue || 'Guest',
+          total: cartTotal,
+          createdAt: new Date().toISOString(),
+        })
+        setToast(`Order ${shortOrderId(result.orderId)} received.`)
         await refreshAfterMutation()
       } catch (error) {
         setToast(`Could not submit order: ${getErrorMessage(error)}`)
@@ -421,7 +506,7 @@ function App() {
       id: `ORD-${Date.now().toString().slice(-6)}`,
       tableId: activeTable.id,
       tableLabel: activeTable.label,
-      customerName: customerName.trim() || 'Guest',
+      customerName: customerNameValue || 'Guest',
       items: cartItems.map(({ menuItem, quantity, note }) => ({
         menuItemId: menuItem.id,
         name: menuItem.name,
@@ -440,7 +525,16 @@ function App() {
     setCustomerNote('')
     setOffsiteContact('')
     setOffsiteDetails('')
-    setToast(`Order ${order.id} sent to kitchen for ${activeTable.label}.`)
+    setLastCustomerOrder({
+      id: order.id,
+      tableId: activeTable.id,
+      tableLabel: activeTable.label,
+      fulfillmentMode,
+      customerName: customerNameValue || 'Guest',
+      total: cartTotal,
+      createdAt: now,
+    })
+    setToast(`Order ${order.id} received.`)
   }
 
   async function advanceOrderStatus(orderId: string, status: OrderStatus) {
@@ -636,20 +730,59 @@ function App() {
   }
 
   function renderCustomerView() {
-    const customerSelectableTables = fulfillmentMode === 'offsite' ? offsiteOrderingOptions : customerViewTableOptions
+    const customerSelectableTables =
+      fulfillmentMode === 'delivery'
+        ? deliveryOrderingOptions
+        : fulfillmentMode === 'pickup'
+        ? pickupOrderingOptions
+        : customerViewTableOptions
     const currentCustomerTable = customerSelectableTables.find((table) => table.id === resolvedSelectedTableId) ?? customerSelectableTables[0]
+    const lastOrder = lastCustomerOrder
+      ? store.orders.find((order) => order.id === lastCustomerOrder.id) ?? lastCustomerOrder
+      : null
 
     return (
       <section className="content-grid">
         <div className="content-stack">
+          {lastOrder ? (
+            <section className="panel confirmation-panel">
+              <span className="eyebrow">Order confirmation</span>
+              <h2>Order received</h2>
+              <div className="confirmation-grid">
+                <div>
+                  <span>Order number</span>
+                  <strong>{shortOrderId(lastOrder.id)}</strong>
+                </div>
+                <div>
+                  <span>Status</span>
+                  <strong>{'status' in lastOrder ? statusLabels[lastOrder.status] : 'Received'}</strong>
+                </div>
+                <div>
+                  <span>Order type</span>
+                  <strong>{fulfillmentLabels[lastCustomerOrder?.fulfillmentMode ?? fulfillmentMode]}</strong>
+                </div>
+                <div>
+                  <span>Total</span>
+                  <strong>{formatCurrency('items' in lastOrder ? getOrderTotal(lastOrder) : lastOrder.total)}</strong>
+                </div>
+              </div>
+              <p className="empty">Keep this page open to follow your order status. You can also place another order below.</p>
+              <button type="button" onClick={() => setLastCustomerOrder(null)}>
+                Place another order
+              </button>
+            </section>
+          ) : null}
+
           <section className="panel">
             <div className="section-title">
               <div>
                 <span className="eyebrow">Guest ordering</span>
                 <h2>Browse the menu</h2>
                 <p>
-                  {fulfillmentMode === 'offsite'
-                    ? 'Order for pickup or delivery without being physically inside the eatery.'
+                  {fulfillmentMode === 'delivery'
+                    ? 'Order for delivery and share your contact details so the team can reach you.'
+                    : fulfillmentMode === 'pickup'
+                    ? 'Order ahead and collect your meal when it is ready.'
                     : 'Choose your table, add notes, and send a clean ticket straight to the kitchen.'}
                 </p>
               </div>
@@ -670,15 +803,27 @@ function App() {
               </button>
               <button
                 type="button"
-                className={fulfillmentMode === 'offsite' ? 'active' : ''}
+                className={fulfillmentMode === 'pickup' ? 'active' : ''}
                 onClick={() => {
-                  setFulfillmentMode('offsite')
-                  if (defaultOffsiteTableId) {
-                    setSelectedTableId(defaultOffsiteTableId)
+                  setFulfillmentMode('pickup')
+                  if (defaultPickupTableId) {
+                    setSelectedTableId(defaultPickupTableId)
                   }
                 }}
               >
-                Pickup / delivery
+                Pickup
+              </button>
+              <button
+                type="button"
+                className={fulfillmentMode === 'delivery' ? 'active' : ''}
+                onClick={() => {
+                  setFulfillmentMode('delivery')
+                  if (defaultDeliveryTableId) {
+                    setSelectedTableId(defaultDeliveryTableId)
+                  }
+                }}
+              >
+                Delivery
               </button>
             </div>
 
@@ -697,31 +842,31 @@ function App() {
               ) : (
                 <>
                   <label>
-                    Service point
-                    <select value={currentCustomerTable?.id ?? ''} onChange={(event) => setSelectedTableId(event.target.value)}>
-                      {customerSelectableTables.map((table) => (
-                        <option key={table.id} value={table.id}>
-                          {table.label}
-                        </option>
-                      ))}
-                    </select>
+                    {fulfillmentMode === 'delivery' ? 'Delivery option' : 'Pickup option'}
+                    <input value={fulfillmentLabels[fulfillmentMode]} readOnly />
                   </label>
 
                   <label>
-                    Phone or contact
+                    Phone number
                     <input
                       value={offsiteContact}
                       onChange={(event) => setOffsiteContact(event.target.value)}
                       placeholder="0800 000 0000"
+                      required
                     />
                   </label>
 
                   <label className="wide-field">
-                    Address or pickup details
+                    {fulfillmentMode === 'delivery' ? 'Delivery address' : 'Preferred pickup time'}
                     <textarea
                       value={offsiteDetails}
                       onChange={(event) => setOffsiteDetails(event.target.value)}
-                      placeholder="Delivery address, landmark, or preferred pickup time"
+                      placeholder={
+                        fulfillmentMode === 'delivery'
+                          ? 'Delivery address and nearby landmark'
+                          : 'Example: 30 minutes from now, or 7:30 PM'
+                      }
+                      required={fulfillmentMode === 'delivery'}
                     />
                   </label>
                 </>
@@ -731,11 +876,17 @@ function App() {
             {customerSelectableTables.length === 0 ? (
               <div className="panel flat customer-helper-note">
                 <strong>
-                  {fulfillmentMode === 'offsite' ? 'No off-site order point is set up yet.' : 'No dine-in tables are available yet.'}
+                  {fulfillmentMode === 'delivery'
+                    ? 'Delivery is not set up yet.'
+                    : fulfillmentMode === 'pickup'
+                    ? 'Pickup is not set up yet.'
+                    : 'No dine-in tables are available yet.'}
                 </strong>
                 <p>
-                  {fulfillmentMode === 'offsite'
-                    ? 'Ask the admin to create a Pickup Counter or Delivery Dispatch point so guests outside the restaurant can order.'
+                  {fulfillmentMode === 'delivery'
+                    ? 'Ask the admin to create a Delivery Dispatch service point.'
+                    : fulfillmentMode === 'pickup'
+                    ? 'Ask the admin to create a Pickup Counter service point.'
                     : 'Ask the admin to create guest tables in the admin workspace.'}
                 </p>
               </div>
@@ -780,12 +931,12 @@ function App() {
 
           <details className="panel history-panel">
             <summary>
-              {fulfillmentMode === 'offsite' ? 'Recent orders for this service point' : 'Recent orders for this table'} ({selectedTableOrders.length})
+              {fulfillmentMode === 'dine-in' ? 'Recent orders for this table' : 'Recent orders for this order type'} ({selectedTableOrders.length})
             </summary>
             <div className="history-list">
               {selectedTableOrders.length === 0 ? (
                 <p className="empty">
-                  {fulfillmentMode === 'offsite' ? 'This pickup / delivery point has no orders yet.' : 'This table has no orders yet.'}
+                  {fulfillmentMode === 'dine-in' ? 'This table has no orders yet.' : 'No recent orders for this order type yet.'}
                 </p>
               ) : (
                 selectedTableOrders.map((order) => (
@@ -818,8 +969,13 @@ function App() {
           <h2>Your cart</h2>
           <form onSubmit={submitOrder}>
             <label>
-              Customer name
-              <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="Guest" />
+              {fulfillmentMode === 'dine-in' ? 'Customer name' : 'Customer name required'}
+              <input
+                value={customerName}
+                onChange={(event) => setCustomerName(event.target.value)}
+                placeholder={fulfillmentMode === 'dine-in' ? 'Guest' : 'Your name'}
+                required={fulfillmentMode !== 'dine-in'}
+              />
             </label>
 
             <div className="cart-lines">
@@ -861,20 +1017,31 @@ function App() {
             </div>
 
             <label>
-              {fulfillmentMode === 'offsite' ? 'Order note' : 'General note to kitchen'}
+              {fulfillmentMode === 'dine-in' ? 'General note to kitchen' : 'Order note'}
               <textarea
                 value={customerNote}
                 onChange={(event) => setCustomerNote(event.target.value)}
                 placeholder={
-                  fulfillmentMode === 'offsite'
+                  fulfillmentMode !== 'dine-in'
                     ? 'Anything the kitchen or dispatch rider should know?'
                     : 'Anything the kitchen should know for this table?'
                 }
               />
             </label>
 
+            <label>
+              Payment method
+              <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+                {(Object.keys(paymentLabels) as PaymentMethod[]).map((method) => (
+                  <option key={method} value={method}>
+                    {paymentLabels[method]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <div className="payment-note">
-              Payment is not collected in the app. Your team can complete payment with the existing POS, cashier flow, or delivery confirmation process.
+              Payment is not collected in the app yet. The selected payment method helps the team prepare checkout or delivery confirmation.
             </div>
 
             <div className="total-row">
@@ -885,7 +1052,7 @@ function App() {
             <button className="submit-button" type="submit" disabled={isSaving || cartItems.length === 0 || !currentCustomerTable}>
               {isSaving
                 ? 'Sending order...'
-                : `Send order${currentCustomerTable ? ` for ${currentCustomerTable.label}` : ''}`}
+                : `Send ${fulfillmentLabels[fulfillmentMode].toLowerCase()} order${fulfillmentMode === 'dine-in' && currentCustomerTable ? ` for ${currentCustomerTable.label}` : ''}`}
             </button>
           </form>
         </aside>
@@ -1313,22 +1480,33 @@ function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    setFulfillmentMode('offsite')
-                    if (defaultOffsiteTableId) {
-                      setSelectedTableId(defaultOffsiteTableId)
+                    setFulfillmentMode('pickup')
+                    if (defaultPickupTableId) {
+                      setSelectedTableId(defaultPickupTableId)
                     }
                   }}
                 >
-                  Order from outside
+                  Pickup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFulfillmentMode('delivery')
+                    if (defaultDeliveryTableId) {
+                      setSelectedTableId(defaultDeliveryTableId)
+                    }
+                  }}
+                >
+                  Delivery
                 </button>
               </div>
             </div>
 
             <div className="stat-card">
               <span>Guest options</span>
-              <strong>{customerViewTableOptions.length + offsiteOrderingOptions.length}</strong>
+              <strong>3</strong>
               <p>
-                dine-in tables and service points available for {currentEateryName}
+                dine-in, pickup, and delivery ordering for {currentEateryName}
               </p>
             </div>
           </div>

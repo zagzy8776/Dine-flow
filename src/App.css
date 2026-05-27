@@ -327,6 +327,39 @@ label {
   margin-top: 16px;
 }
 
+.confirmation-panel {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: linear-gradient(135deg, rgba(240, 253, 244, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.confirmation-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.confirmation-grid div {
+  border: 1px solid rgba(22, 163, 74, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 12px;
+}
+
+.confirmation-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.confirmation-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: #14532d;
+}
+
 .cart-line {
   display: grid;
   gap: 10px;
@@ -451,7 +484,8 @@ code {
   .admin-grid,
   .order-board,
   .menu-list,
-  .customer-meta-grid {
+  .customer-meta-grid,
+  .confirmation-grid {
     grid-template-columns: 1fr;
   }
 
