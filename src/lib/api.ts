@@ -23,7 +23,8 @@ function buildUrl(path: string, query?: RequestOptions['query']) {
 }
 
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(buildUrl(path, options.query), {
+  const requestUrl = buildUrl(path, options.query)
+  const response = await fetch(requestUrl, {
     method: options.method ?? 'GET',
     credentials: 'include',
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
@@ -31,7 +32,20 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
   })
 
   const text = await response.text()
-  const payload = text ? (JSON.parse(text) as unknown) : null
+  let payload: unknown = null
+
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch {
+      const receivedHtml = text.trim().startsWith('<!doctype') || text.trim().startsWith('<html')
+      throw new Error(
+        receivedHtml
+          ? `The frontend reached an HTML page instead of the Render API. Check VITE_API_BASE_URL; it must be your Render backend URL, not the Vercel frontend URL. Failed request: ${requestUrl}`
+          : `The API returned invalid JSON for ${requestUrl}.`,
+      )
+    }
+  }
 
   if (!response.ok) {
     const message =

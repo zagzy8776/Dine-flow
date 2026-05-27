@@ -266,11 +266,13 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
-  const loadApiData = useCallback(async () => {
+  const loadApiData = useCallback(async (background = false) => {
     if (mode !== 'api') return
 
-    setIsLoading(true)
-    setLoadError('')
+    if (!background) {
+      setIsLoading(true)
+      setLoadError('')
+    }
 
     try {
       const payload = await bootstrapApp(EATERY_SLUG)
@@ -279,9 +281,13 @@ function App() {
       setStaffProfile(payload.staffProfile)
       setStore(payload.store)
     } catch (error) {
-      setLoadError(getErrorMessage(error))
+      if (!background) {
+        setLoadError(getErrorMessage(error))
+      }
     } finally {
-      setIsLoading(false)
+      if (!background) {
+        setIsLoading(false)
+      }
     }
   }, [mode])
 
@@ -307,7 +313,7 @@ function App() {
   useEffect(() => {
     if (mode !== 'api') return undefined
     const timer = window.setInterval(() => {
-      void loadApiData()
+      void loadApiData(true)
     }, 15000)
     return () => window.clearInterval(timer)
   }, [loadApiData, mode])
@@ -315,7 +321,7 @@ function App() {
   useEffect(() => {
     if (mode !== 'api') return undefined
     const stream = createRealtimeStream(EATERY_SLUG, () => {
-      void loadApiData()
+      void loadApiData(true)
     })
     return () => stream?.close()
   }, [loadApiData, mode])
