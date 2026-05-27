@@ -192,17 +192,8 @@ function App() {
     : getInitialTableId(store.tables)
 
   useEffect(() => {
-    if (selectedTableId !== resolvedSelectedTableId) {
-      setSelectedTableId(resolvedSelectedTableId)
-    }
-  }, [resolvedSelectedTableId, selectedTableId])
-
-  useEffect(() => {
     if (mode !== 'api') return undefined
-    if (!resolvedSelectedTableId) {
-      setPublicTableOrders([])
-      return undefined
-    }
+    if (!resolvedSelectedTableId) return undefined
 
     const timer = window.setTimeout(() => {
       void loadPublicOrders(resolvedSelectedTableId)
@@ -251,7 +242,7 @@ function App() {
       return store.orders.filter((order) => order.tableId === resolvedSelectedTableId)
     }
 
-    return publicTableOrders
+    return resolvedSelectedTableId ? publicTableOrders : []
   }, [canUseKitchen, mode, publicTableOrders, resolvedSelectedTableId, store.orders])
   const bestSeller = useMemo(() => {
     const counts = new Map<string, { name: string; quantity: number }>()
