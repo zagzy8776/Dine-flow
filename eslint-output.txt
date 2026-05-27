@@ -1,0 +1,53 @@
+
+c:\Users\ZAGZY\Desktop\eatery-ordering-mvp\src\App.tsx
+  487:12  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+c:\Users\ZAGZY\Desktop\eatery-ordering-mvp\src\App.tsx:487:12
+  485 |   useEffect(() => {
+  486 |     if (mode === 'supabase') {
+> 487 |       void loadProductionData()
+      |            ^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  488 |     }
+  489 |   }, [loadProductionData, mode])
+  490 |                                                                         react-hooks/set-state-in-effect
+  513:7   error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+c:\Users\ZAGZY\Desktop\eatery-ordering-mvp\src\App.tsx:513:7
+  511 |   useEffect(() => {
+  512 |     if (store.tables.length === 0) {
+> 513 |       setSelectedTableId('')
+      |       ^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  514 |       return
+  515 |     }
+  516 |                                                                                                react-hooks/set-state-in-effect
+  525:7   error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+c:\Users\ZAGZY\Desktop\eatery-ordering-mvp\src\App.tsx:525:7
+  523 |     const nextCategories = ['All', ...Array.from(new Set(store.menu.map((item) => item.category)))]
+  524 |     if (!nextCategories.includes(category)) {
+> 525 |       setCategory('All')
+      |       ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  526 |     }
+  527 |   }, [category, store.menu])
+  528 |  react-hooks/set-state-in-effect
+
+✖ 3 problems (3 errors, 0 warnings)
+

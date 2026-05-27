@@ -1,0 +1,4 @@
+src/App.tsx(469,20): error TS2352: Conversion of type '{ id: any; table_id: any; customer_name: any; status: any; note: any; created_at: any; updated_at: any; eatery_tables: { label: any; }[]; order_items: { menu_item_id: any; item_name: any; unit_price: any; quantity: any; note: any; }[]; }[]' to type 'OrderRow[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ id: any; table_id: any; customer_name: any; status: any; note: any; created_at: any; updated_at: any; eatery_tables: { label: any; }[]; order_items: { menu_item_id: any; item_name: any; unit_price: any; quantity: any; note: any; }[]; }' is not comparable to type 'OrderRow'.
+    Types of property 'eatery_tables' are incompatible.
+      Property 'label' is missing in type '{ label: any; }[]' but required in type '{ label: string; }'.
