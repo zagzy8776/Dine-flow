@@ -1,7 +1,9 @@
 export type View = 'customer' | 'kitchen' | 'admin'
-export type OrderStatus = 'received' | 'preparing' | 'ready' | 'served' | 'cancelled'
+export type OrderStatus = 'open_tab' | 'received' | 'preparing' | 'ready' | 'served' | 'cancelled'
 export type StaffRole = 'owner' | 'admin' | 'kitchen' | 'waiter'
 export type AppMode = 'demo' | 'api'
+export type ServiceRequestType = 'waiter' | 'bill' | 'cash_payment'
+export type ServiceRequestStatus = 'open' | 'acknowledged' | 'resolved'
 
 export type MenuItem = {
   id: string
@@ -11,12 +13,16 @@ export type MenuItem = {
   description: string
   available: boolean
   prepMinutes: number
+  stockCount?: number
+  lowStockThreshold?: number
 }
 
 export type EateryTable = {
   id: string
   label: string
   seats: number
+  floorX?: number
+  floorY?: number
 }
 
 export type OrderItem = {
@@ -39,10 +45,33 @@ export type Order = {
   updatedAt: string
 }
 
+export type ServiceRequest = {
+  id: string
+  tableId: string
+  tableLabel: string
+  type: ServiceRequestType
+  status: ServiceRequestStatus
+  message: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SplitPayment = {
+  id: string
+  tableId: string
+  payerName: string
+  amount: number
+  method: string
+  itemKeys: string[]
+  createdAt: string
+}
+
 export type Store = {
   menu: MenuItem[]
   tables: EateryTable[]
   orders: Order[]
+  serviceRequests: ServiceRequest[]
+  splitPayments: SplitPayment[]
 }
 
 export type CartLine = {

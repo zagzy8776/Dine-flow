@@ -1,4 +1,4 @@
-import type { BootstrapPayload, Order, OrderStatus } from '../app-types'
+import type { BootstrapPayload, Order, OrderStatus, ServiceRequestType } from '../app-types'
 
 export const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
 
@@ -64,6 +64,13 @@ export async function loginStaff(slug: string, email: string, password: string) 
   })
 }
 
+export async function loginStaffWithPin(slug: string, pin: string) {
+  return requestJson<{ ok: true; message: string }>('/api/staff/pin-login', {
+    method: 'POST',
+    body: { slug, pin },
+  })
+}
+
 export async function logoutStaff() {
   return requestJson<{ ok: true }>('/api/staff/logout', {
     method: 'POST',
@@ -75,12 +82,54 @@ export async function submitGuestOrder(payload: {
   tableId: string
   customerName: string
   note?: string
+  tabMode?: boolean
   items: Array<{ menuItemId: string; quantity: number; note?: string }>
 }) {
   return requestJson<{ orderId: string }>('/api/orders', {
     method: 'POST',
     body: payload,
   })
+}
+
+export async function createServiceRequest(payload: {
+  slug: string
+  tableId: string
+  type: ServiceRequestType
+  message?: string
+}) {
+  return requestJson<{ ok: true; id: string }>('/api/service-requests', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export async function updateServiceRequestStatus(requestId: string, payload: { slug: string; status: 'acknowledged' | 'resolved' }) {
+  return requestJson<{ ok: true }>(`/api/service-requests/${requestId}/status`, {
+    method: 'PATCH',
+    body: payload,
+  })
+}
+
+export async function createSplitPayment(payload: {
+  slug: string
+  tableId: string
+  payerName: string
+  amount: number
+  method: string
+  itemKeys: string[]
+}) {
+  return requestJson<{ ok: true; id: string }>('/api/split-payments', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export function createRealtimeStream(slug: string, onMessage: () => void) {
+  if (!API_BASE_URL || typeof EventSource === 'undefined') return null
+  const stream = new EventSource(buildUrl('/api/events', { slug }), { withCredentials: true })
+  stream.addEventListener('message', () => onMessage())
+  stream.addEventListener('dineflow-update', () => onMessage())
+  return stream
 }
 
 export async function updateOrderStatus(orderId: string, slug: string, status: OrderStatus) {

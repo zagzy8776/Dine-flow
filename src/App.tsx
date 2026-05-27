@@ -5,15 +5,20 @@ import type { AppMode, CartLine, Eatery, MenuItem, Order, OrderStatus, StaffProf
 import { emptyStore, getInitialTableId, getInitialView, initialStore, loadDemoStore, STORAGE_KEY } from './demo-data'
 import {
   bootstrapApp,
+  createRealtimeStream,
   createMenuItem as createMenuItemRequest,
+  createServiceRequest,
+  createSplitPayment,
   createTable as createTableRequest,
   deleteMenuItem as deleteMenuItemRequest,
   fetchTableOrders,
   hasApiMode,
   loginStaff,
+  loginStaffWithPin,
   logoutStaff,
   setMenuItemAvailability,
   submitGuestOrder,
+  updateServiceRequestStatus,
   updateOrderStatus as updateOrderStatusRequest,
 } from './lib/api'
 
@@ -21,6 +26,7 @@ const EATERY_SLUG = String(import.meta.env.VITE_EATERY_SLUG ?? 'dine-flow').trim
 const EATERY_NAME = String(import.meta.env.VITE_EATERY_NAME ?? 'Dine Flow').trim() || 'Dine Flow'
 
 const statusLabels: Record<OrderStatus, string> = {
+  open_tab: 'Open tab',
   received: 'Received',
   preparing: 'Preparing',
   ready: 'Ready',
@@ -35,7 +41,7 @@ const roleLabels: Record<StaffRole, string> = {
   waiter: 'Waiter',
 }
 
-const statusFlow: OrderStatus[] = ['received', 'preparing', 'ready', 'served']
+const statusFlow: OrderStatus[] = ['open_tab', 'received', 'preparing', 'ready', 'served']
 const staffViewRoles: StaffRole[] = ['owner', 'admin', 'kitchen', 'waiter']
 const managementRoles: StaffRole[] = ['owner', 'admin']
 const recommendedServicePoints = [
@@ -78,9 +84,34 @@ function getOrderTotal(order: Order) {
 }
 
 function getStatusClass(status: OrderStatus) {
+  if (status === 'open_tab') return 'status-open-tab'
   if (status === 'preparing') return 'status-preparing'
   if (status === 'ready') return 'status-ready'
   return ''
+}
+
+function getKdsAgeClass(createdAt: string) {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000))
+  if (minutes >= 20) return 'age-danger'
+  if (minutes >= 10) return 'age-warning'
+  return 'age-ok'
+}
+
+function getQrImageUrl(link: string) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(link)}`
+}
+
+function buildEscPosPreview(order: Order) {
+  const lines = [
+    'DINEFLOW KITCHEN TICKET',
+    `Table: ${order.tableLabel}`,
+    `Order: ${shortOrderId(order.id)}`,
+    '------------------------',
+    ...order.items.map((item) => `${item.quantity} x ${item.name}`),
+    '------------------------',
+    `Total: ${formatCurrency(getOrderTotal(order))}`,
+  ]
+  return lines.join('\n')
 }
 
 function shortOrderId(orderId: string | null | undefined) {
@@ -208,6 +239,12 @@ function App() {
   const [isLoading, setIsLoading] = useState(mode === 'api')
   const [isSaving, setIsSaving] = useState(false)
   const [authForm, setAuthForm] = useState({ email: '', password: '' })
+  const [pinValue, setPinValue] = useState('')
+  const [splitPanelOpen, setSplitPanelOpen] = useState(false)
+  const [splitMode, setSplitMode] = useState<'equal' | 'items'>('equal')
+  const [splitPeople, setSplitPeople] = useState('2')
+  const [splitItemKeys, setSplitItemKeys] = useState<string[]>([])
+  const [payerName, setPayerName] = useState('Guest')
   const [menuForm, setMenuForm] = useState({
     name: '',
     category: '',
@@ -275,6 +312,14 @@ function App() {
     return () => window.clearInterval(timer)
   }, [loadApiData, mode])
 
+  useEffect(() => {
+    if (mode !== 'api') return undefined
+    const stream = createRealtimeStream(EATERY_SLUG, () => {
+      void loadApiData()
+    })
+    return () => stream?.close()
+  }, [loadApiData, mode])
+
   const resolvedSelectedTableId = store.tables.some((table) => table.id === selectedTableId)
     ? selectedTableId
     : getInitialTableId(store.tables)
@@ -296,6 +341,8 @@ function App() {
   )
   const activeCategory = categories.includes(category) ? category : 'All'
   const selectedTable = store.tables.find((table) => table.id === resolvedSelectedTableId) ?? store.tables[0]
+  const urlTableId = new URLSearchParams(window.location.search).get('table')
+  const isTableLocked = Boolean(urlTableId && store.tables.some((table) => table.id === urlTableId))
   const currentEateryName = eatery?.name ?? EATERY_NAME
   const canUseKitchen = mode === 'demo' || Boolean(staffProfile && staffViewRoles.includes(staffProfile.role))
   const canManage = mode === 'demo' || Boolean(staffProfile && managementRoles.includes(staffProfile.role))
@@ -328,6 +375,7 @@ function App() {
   }, [cart, store.menu])
 
   const cartTotal = useMemo(() => cartItems.reduce((sum, item) => sum + item.total, 0), [cartItems])
+  const cartCount = useMemo(() => cartItems.reduce((sum, item) => sum + item.quantity, 0), [cartItems])
   const activeOrders = useMemo(
     () => store.orders.filter((order) => !['served', 'cancelled'].includes(order.status)),
     [store.orders],
@@ -344,6 +392,12 @@ function App() {
 
     return resolvedSelectedTableId ? publicTableOrders : []
   }, [canUseKitchen, mode, publicTableOrders, resolvedSelectedTableId, store.orders])
+  const openTabOrders = useMemo(
+    () => selectedTableOrders.filter((order) => !['served', 'cancelled'].includes(order.status)),
+    [selectedTableOrders],
+  )
+  const openTabTotal = useMemo(() => openTabOrders.reduce((sum, order) => sum + getOrderTotal(order), 0), [openTabOrders])
+  const outstandingTableTotal = openTabTotal + cartTotal
   const bestSeller = useMemo(() => {
     const counts = new Map<string, { name: string; quantity: number }>()
     for (const order of store.orders) {
@@ -397,6 +451,46 @@ function App() {
         })
         .filter((line) => line.quantity > 0),
     )
+  }
+
+  async function sendServiceRequest(type: 'waiter' | 'bill' | 'cash_payment') {
+    const activeTable = store.tables.find((table) => table.id === resolvedSelectedTableId) ?? selectedTable
+    if (!activeTable) {
+      setToast('Select a table first.')
+      return
+    }
+
+    const message = type === 'waiter' ? `${activeTable.label} is requesting a waiter.` : `${activeTable.label} is requesting the bill.`
+
+    if (mode === 'api') {
+      try {
+        await createServiceRequest({ slug: EATERY_SLUG, tableId: activeTable.id, type, message })
+        setToast(type === 'waiter' ? 'Waiter requested.' : 'Bill requested.')
+        await refreshAfterMutation()
+      } catch (error) {
+        setToast(`Could not send request: ${getErrorMessage(error)}`)
+      }
+      return
+    }
+
+    const now = new Date().toISOString()
+    setStore((current) => ({
+      ...current,
+      serviceRequests: [
+        {
+          id: `REQ-${Date.now().toString().slice(-6)}`,
+          tableId: activeTable.id,
+          tableLabel: activeTable.label,
+          type,
+          status: 'open',
+          message,
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...current.serviceRequests,
+      ],
+    }))
+    setToast(type === 'waiter' ? 'Waiter requested.' : 'Bill requested.')
   }
 
   async function refreshAfterMutation() {
@@ -470,6 +564,7 @@ function App() {
           tableId: activeTable.id,
           customerName: customerNameValue || 'Guest',
           note: guestOrderNote || undefined,
+          tabMode: fulfillmentMode === 'dine-in',
           items: cartItems.map(({ menuItem, quantity, note }) => ({
             menuItemId: menuItem.id,
             quantity,
@@ -514,7 +609,7 @@ function App() {
         quantity,
         note: note.trim() || undefined,
       })),
-      status: 'received',
+      status: fulfillmentMode === 'dine-in' ? 'open_tab' : 'received',
       note: guestOrderNote || undefined,
       createdAt: now,
       updatedAt: now,
@@ -557,6 +652,82 @@ function App() {
         order.id === orderId ? { ...order, status, updatedAt: new Date().toISOString() } : order,
       ),
     }))
+  }
+
+  async function resolveServiceRequest(requestId: string, status: 'acknowledged' | 'resolved') {
+    if (mode === 'api') {
+      if (!canUseKitchen) return
+      try {
+        await updateServiceRequestStatus(requestId, { slug: EATERY_SLUG, status })
+        await refreshAfterMutation()
+      } catch (error) {
+        setToast(`Could not update request: ${getErrorMessage(error)}`)
+      }
+      return
+    }
+
+    setStore((current) => ({
+      ...current,
+      serviceRequests: current.serviceRequests.map((request) =>
+        request.id === requestId ? { ...request, status, updatedAt: new Date().toISOString() } : request,
+      ),
+    }))
+  }
+
+  async function saveSplitPayment() {
+    const activeTable = store.tables.find((table) => table.id === resolvedSelectedTableId) ?? selectedTable
+    if (!activeTable) return
+
+    const people = Math.max(1, Number(splitPeople) || 1)
+    const selectedAmount = splitItemKeys.reduce((sum, key) => {
+      const [orderId, itemIndex] = key.split(':')
+      const order = openTabOrders.find((candidate) => candidate.id === orderId)
+      const item = order?.items[Number(itemIndex)]
+      return item ? sum + item.price * item.quantity : sum
+    }, 0)
+    const amount = splitMode === 'equal' ? outstandingTableTotal / people : selectedAmount
+
+    if (amount <= 0) {
+      setToast('Select items or use a valid split amount.')
+      return
+    }
+
+    if (mode === 'api') {
+      try {
+        await createSplitPayment({
+          slug: EATERY_SLUG,
+          tableId: activeTable.id,
+          payerName: payerName.trim() || 'Guest',
+          amount,
+          method: paymentMethod,
+          itemKeys: splitMode === 'equal' ? [] : splitItemKeys,
+        })
+        setToast(`Split payment recorded for ${formatCurrency(amount)}.`)
+        setSplitPanelOpen(false)
+        await refreshAfterMutation()
+      } catch (error) {
+        setToast(`Could not record split payment: ${getErrorMessage(error)}`)
+      }
+      return
+    }
+
+    setStore((current) => ({
+      ...current,
+      splitPayments: [
+        {
+          id: `PAY-${Date.now().toString().slice(-6)}`,
+          tableId: activeTable.id,
+          payerName: payerName.trim() || 'Guest',
+          amount,
+          method: paymentMethod,
+          itemKeys: splitMode === 'equal' ? [] : splitItemKeys,
+          createdAt: new Date().toISOString(),
+        },
+        ...current.splitPayments,
+      ],
+    }))
+    setToast(`Split payment recorded for ${formatCurrency(amount)}.`)
+    setSplitPanelOpen(false)
   }
 
   async function toggleAvailability(menuItemId: string) {
@@ -715,6 +886,22 @@ function App() {
     }
   }
 
+  async function signInStaffWithPin() {
+    if (mode !== 'api' || pinValue.length !== 4) return
+    setIsSaving(true)
+    try {
+      await loginStaffWithPin(EATERY_SLUG, pinValue)
+      setPinValue('')
+      setToast('PIN accepted. Loading staff access...')
+      await loadApiData()
+    } catch (error) {
+      setToast(`Could not sign in with PIN: ${getErrorMessage(error)}`)
+      setPinValue('')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   async function signOutStaff() {
     if (mode !== 'api') return
 
@@ -767,6 +954,15 @@ function App() {
                 </div>
               </div>
               <p className="empty">Keep this page open to follow your order status. You can also place another order below.</p>
+              {'status' in lastOrder ? (
+                <div className="progress-steps">
+                  {(['received', 'preparing', 'ready', 'served'] as OrderStatus[]).map((step) => (
+                    <div key={step} className={statusFlow.indexOf(lastOrder.status) >= statusFlow.indexOf(step) ? 'complete' : ''}>
+                      <span>{statusLabels[step]}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <button type="button" onClick={() => setLastCustomerOrder(null)}>
                 Place another order
               </button>
@@ -830,14 +1026,18 @@ function App() {
             <div className="customer-meta-grid">
               {fulfillmentMode === 'dine-in' ? (
                 <label>
-                  Table
-                  <select value={currentCustomerTable?.id ?? ''} onChange={(event) => setSelectedTableId(event.target.value)}>
-                    {customerSelectableTables.map((table) => (
-                      <option key={table.id} value={table.id}>
-                        {table.label} • {table.seats} seats
-                      </option>
-                    ))}
-                  </select>
+                  {isTableLocked ? 'Locked table from QR link' : 'Table'}
+                  {isTableLocked ? (
+                    <input value={currentCustomerTable ? `${currentCustomerTable.label} • ${currentCustomerTable.seats} seats` : ''} readOnly />
+                  ) : (
+                    <select value={currentCustomerTable?.id ?? ''} onChange={(event) => setSelectedTableId(event.target.value)}>
+                      {customerSelectableTables.map((table) => (
+                        <option key={table.id} value={table.id}>
+                          {table.label} • {table.seats} seats
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </label>
               ) : (
                 <>
@@ -918,9 +1118,21 @@ function App() {
 
                   <div className="menu-card-footer">
                     <strong>{formatCurrency(item.price)}</strong>
-                    <button type="button" onClick={() => addToCart(item.id)} disabled={!item.available}>
-                      {item.available ? 'Add to cart' : 'Unavailable'}
-                    </button>
+                    {cart.find((line) => line.menuItemId === item.id) ? (
+                      <div className="qty-row menu-qty-row">
+                        <button type="button" onClick={() => updateCartLine(item.id, (cart.find((line) => line.menuItemId === item.id)?.quantity ?? 1) - 1)}>
+                          −
+                        </button>
+                        <strong>{cart.find((line) => line.menuItemId === item.id)?.quantity ?? 0}</strong>
+                        <button type="button" onClick={() => addToCart(item.id)} disabled={!item.available}>
+                          +
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => addToCart(item.id)} disabled={!item.available}>
+                        {item.available ? 'Add to cart' : 'Unavailable'}
+                      </button>
+                    )}
                   </div>
                 </article>
               ))}
@@ -967,6 +1179,13 @@ function App() {
 
         <aside className="panel cart-panel">
           <h2>Your cart</h2>
+          {fulfillmentMode === 'dine-in' ? (
+            <div className="open-tab-card">
+              <span>Open tab running total</span>
+              <strong>{formatCurrency(outstandingTableTotal)}</strong>
+              <small>{openTabOrders.length} active kitchen ticket(s) for this table</small>
+            </div>
+          ) : null}
           <form onSubmit={submitOrder}>
             <label>
               {fulfillmentMode === 'dine-in' ? 'Customer name' : 'Customer name required'}
@@ -1052,10 +1271,78 @@ function App() {
             <button className="submit-button" type="submit" disabled={isSaving || cartItems.length === 0 || !currentCustomerTable}>
               {isSaving
                 ? 'Sending order...'
-                : `Send ${fulfillmentLabels[fulfillmentMode].toLowerCase()} order${fulfillmentMode === 'dine-in' && currentCustomerTable ? ` for ${currentCustomerTable.label}` : ''}`}
+                : fulfillmentMode === 'dine-in'
+                ? `Send to kitchen${currentCustomerTable ? ` for ${currentCustomerTable.label}` : ''}`
+                : `Send ${fulfillmentLabels[fulfillmentMode].toLowerCase()} order`}
             </button>
+            {fulfillmentMode === 'dine-in' ? (
+              <button type="button" className="secondary-button" onClick={() => setSplitPanelOpen(true)} disabled={outstandingTableTotal <= 0}>
+                Split / settle bill
+              </button>
+            ) : null}
           </form>
         </aside>
+        {splitPanelOpen ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="panel split-modal">
+              <div className="section-title">
+                <div>
+                  <span className="eyebrow">Smart bill splitting</span>
+                  <h2>Settle table bill</h2>
+                </div>
+                <button type="button" onClick={() => setSplitPanelOpen(false)}>Close</button>
+              </div>
+              <div className="guest-mode-toggle">
+                <button type="button" className={splitMode === 'equal' ? 'active' : ''} onClick={() => setSplitMode('equal')}>Split equally</button>
+                <button type="button" className={splitMode === 'items' ? 'active' : ''} onClick={() => setSplitMode('items')}>Pay my items</button>
+              </div>
+              <label>
+                Payer name
+                <input value={payerName} onChange={(event) => setPayerName(event.target.value)} />
+              </label>
+              {splitMode === 'equal' ? (
+                <label>
+                  Number of people
+                  <input inputMode="numeric" value={splitPeople} onChange={(event) => setSplitPeople(event.target.value)} />
+                </label>
+              ) : (
+                <div className="split-item-list">
+                  {openTabOrders.flatMap((order) => order.items.map((item, index) => ({ order, item, key: `${order.id}:${index}` }))).map(({ order, item, key }) => (
+                    <label key={key} className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={splitItemKeys.includes(key)}
+                        onChange={(event) => setSplitItemKeys((current) => event.target.checked ? [...current, key] : current.filter((itemKey) => itemKey !== key))}
+                      />
+                      {item.quantity} × {item.name} from {shortOrderId(order.id)} • {formatCurrency(item.price * item.quantity)}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="total-row">
+                <span>Amount due now</span>
+                <strong>{formatCurrency(splitMode === 'equal' ? outstandingTableTotal / Math.max(1, Number(splitPeople) || 1) : splitItemKeys.reduce((sum, key) => {
+                  const [orderId, itemIndex] = key.split(':')
+                  const order = openTabOrders.find((candidate) => candidate.id === orderId)
+                  const item = order?.items[Number(itemIndex)]
+                  return item ? sum + item.price * item.quantity : sum
+                }, 0))}</strong>
+              </div>
+              <button type="button" onClick={() => void saveSplitPayment()}>Record split payment</button>
+            </section>
+          </div>
+        ) : null}
+        {fulfillmentMode === 'dine-in' ? (
+          <div className="customer-fab-stack">
+            <button type="button" onClick={() => void sendServiceRequest('waiter')}>Call Waiter</button>
+            <button type="button" onClick={() => void sendServiceRequest('bill')}>Request Bill</button>
+          </div>
+        ) : null}
+        {cartCount > 0 ? (
+          <button type="button" className="mobile-cart-bar" onClick={() => document.querySelector('.cart-panel')?.scrollIntoView({ behavior: 'smooth' })}>
+            View cart • {cartCount} item{cartCount === 1 ? '' : 's'} • {formatCurrency(cartTotal)}
+          </button>
+        ) : null}
       </section>
     )
   }
@@ -1073,6 +1360,29 @@ function App() {
 
     return (
       <section className="content-stack">
+        {store.serviceRequests.filter((request) => request.status !== 'resolved').length > 0 ? (
+          <section className="panel service-alert-panel">
+            <div className="section-title">
+              <div>
+                <span className="eyebrow">Floor alerts</span>
+                <h2>Waiter and bill requests</h2>
+              </div>
+            </div>
+            <div className="service-request-list">
+              {store.serviceRequests.filter((request) => request.status !== 'resolved').map((request) => (
+                <article key={request.id} className="service-request-card">
+                  <strong>{request.tableLabel}</strong>
+                  <span>{request.type === 'waiter' ? 'Needs waiter' : 'Wants bill / payment'} • {formatRelativeTime(request.createdAt)}</span>
+                  <p>{request.message}</p>
+                  <div className="order-actions">
+                    {request.status === 'open' ? <button type="button" onClick={() => void resolveServiceRequest(request.id, 'acknowledged')}>Acknowledge</button> : null}
+                    <button type="button" onClick={() => void resolveServiceRequest(request.id, 'resolved')}>Resolve</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <section className="panel">
           <div className="section-title">
             <div>
@@ -1089,7 +1399,7 @@ function App() {
               const nextStatus = currentStatusIndex === -1 ? undefined : statusFlow[currentStatusIndex + 1]
 
               return (
-                <article key={order.id} className={`panel order-card ${getStatusClass(order.status)}`}>
+                <article key={order.id} className={`panel order-card ${getStatusClass(order.status)} ${getKdsAgeClass(order.createdAt)}`}>
                   <div className="order-head">
                     <div>
                       <h3>{order.tableLabel}</h3>
@@ -1117,6 +1427,9 @@ function App() {
                   </div>
 
                   <div className="order-actions">
+                    <button type="button" className="secondary-button" onClick={() => window.alert(buildEscPosPreview(order))}>
+                      ESC/POS preview
+                    </button>
                     {nextStatus ? (
                       <button type="button" onClick={() => void advanceOrderStatus(order.id, nextStatus)}>
                         Mark as {statusLabels[nextStatus]}
@@ -1184,30 +1497,43 @@ function App() {
           <p>Admin tools are separated from customer ordering. Sign in with an owner or admin account to manage menu items, tables, and service points.</p>
 
           {mode === 'api' ? (
-            <form className="admin-form" onSubmit={signInStaff}>
-              <label>
-                Email
-                <input
-                  type="email"
-                  value={authForm.email}
-                  onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
-                  placeholder="owner@dineflow.com"
-                />
-              </label>
+            <div className="auth-grid">
+              <form className="admin-form" onSubmit={signInStaff}>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={authForm.email}
+                    onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
+                    placeholder="owner@dineflow.com"
+                  />
+                </label>
 
-              <label>
-                Password
-                <input
-                  type="password"
-                  value={authForm.password}
-                  onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
-                />
-              </label>
+                <label>
+                  Password
+                  <input
+                    type="password"
+                    value={authForm.password}
+                    onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                  />
+                </label>
 
-              <button type="submit" disabled={isSaving}>
-                {isSaving ? 'Signing in...' : 'Sign in'}
-              </button>
-            </form>
+                <button type="submit" disabled={isSaving}>
+                  {isSaving ? 'Signing in...' : 'Sign in'}
+                </button>
+              </form>
+              <div className="pin-pad-panel">
+                <strong>Fast staff PIN</strong>
+                <output>{pinValue.padEnd(4, '•')}</output>
+                <div className="pin-grid">
+                  {'1234567890'.split('').map((digit) => (
+                    <button key={digit} type="button" onClick={() => setPinValue((current) => (current + digit).slice(0, 4))}>{digit}</button>
+                  ))}
+                  <button type="button" onClick={() => setPinValue('')}>Clear</button>
+                  <button type="button" onClick={() => void signInStaffWithPin()} disabled={pinValue.length !== 4}>Go</button>
+                </div>
+              </div>
+            </div>
           ) : (
             <p>Demo mode allows direct access so you can test the workflow locally.</p>
           )}
@@ -1234,6 +1560,7 @@ function App() {
               </button>
             </div>
           ) : (
+            <div className="auth-grid">
             <form className="admin-form" onSubmit={signInStaff}>
               <label>
                 Email
@@ -1260,6 +1587,19 @@ function App() {
 
               <p className="empty">Default seeded owner login: owner@dineflow.com / ChangeMe123!</p>
             </form>
+            <div className="pin-pad-panel">
+              <strong>Fast staff PIN</strong>
+              <output>{pinValue.padEnd(4, '•')}</output>
+              <div className="pin-grid">
+                {'1234567890'.split('').map((digit) => (
+                  <button key={digit} type="button" onClick={() => setPinValue((current) => (current + digit).slice(0, 4))}>{digit}</button>
+                ))}
+                <button type="button" onClick={() => setPinValue('')}>Clear</button>
+                <button type="button" onClick={() => void signInStaffWithPin()} disabled={pinValue.length !== 4}>Go</button>
+              </div>
+              <p className="empty">Add `pin_hash = sha256('dineflow-pin:1234')` for staff in Neon to enable this.</p>
+            </div>
+            </div>
           )}
         </section>
 
@@ -1415,6 +1755,13 @@ function App() {
                       <span>
                         {item.category} • {formatCurrency(item.price)} • {item.prepMinutes} min prep
                       </span>
+                      {item.stockCount !== undefined ? (
+                        <span className={item.stockCount <= (item.lowStockThreshold ?? 5) ? 'inventory-danger' : ''}>
+                          Stock: {item.stockCount} • Alert below {item.lowStockThreshold ?? 5}
+                        </span>
+                      ) : (
+                        <span>Inventory alert: add stock counts in Neon to enable predictive warnings.</span>
+                      )}
                     </div>
 
                     <div className="order-actions">
@@ -1437,9 +1784,28 @@ function App() {
                     </strong>
                     <span>{isOffsiteOrderingPoint(table.label) ? 'Off-site ordering point' : 'Guest ordering link'}</span>
                     <code>{buildTableLink(table.id)}</code>
+                    {!isOffsiteOrderingPoint(table.label) ? <img className="qr-code" src={getQrImageUrl(buildTableLink(table.id))} alt={`QR code for ${table.label}`} /> : null}
                   </div>
                 ))}
               </div>
+            </section>
+            <section className="panel wide">
+              <span className="eyebrow">Floor plan builder</span>
+              <h2>Interactive table layout preview</h2>
+              <div className="floor-plan-canvas">
+                {store.tables.filter((table) => !isOffsiteOrderingPoint(table.label)).map((table, index) => (
+                  <button
+                    key={table.id}
+                    type="button"
+                    className="floor-table"
+                    style={{ left: `${table.floorX ?? 8 + (index % 4) * 22}%`, top: `${table.floorY ?? 12 + Math.floor(index / 4) * 28}%` }}
+                    onClick={() => setSelectedTableId(table.id)}
+                  >
+                    {table.label}
+                  </button>
+                ))}
+              </div>
+              <p className="empty">This MVP stores/reads floor coordinates when present. Drag-and-save can be added next without changing the database.</p>
             </section>
           </>
         )}

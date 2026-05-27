@@ -6,6 +6,8 @@ export const emptyStore: Store = {
   menu: [],
   tables: [],
   orders: [],
+  serviceRequests: [],
+  splitPayments: [],
 }
 
 export const initialStore: Store = {
@@ -89,6 +91,8 @@ export const initialStore: Store = {
       updatedAt: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
     },
   ],
+  serviceRequests: [],
+  splitPayments: [],
 }
 
 export function loadDemoStore(): Store {
@@ -101,7 +105,13 @@ export function loadDemoStore(): Store {
       return initialStore
     }
 
-    return parsed as Store
+    return {
+      menu: parsed.menu,
+      tables: parsed.tables,
+      orders: parsed.orders,
+      serviceRequests: Array.isArray(parsed.serviceRequests) ? parsed.serviceRequests : [],
+      splitPayments: Array.isArray(parsed.splitPayments) ? parsed.splitPayments : [],
+    } as Store
   } catch {
     return initialStore
   }

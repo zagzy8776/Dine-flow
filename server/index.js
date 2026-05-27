@@ -6,7 +6,10 @@ const PORT = Number(process.env.PORT || 4000)
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim()
 const FRONTEND_ORIGIN = String(process.env.FRONTEND_ORIGIN || '').trim()
 const SESSION_COOKIE_NAME = 'dineflow_session'
-const ORDER_STATUSES = new Set(['received', 'preparing', 'ready', 'served', 'cancelled'])
+const ORDER_STATUSES = new Set(['open_tab', 'received', 'preparing', 'ready', 'served', 'cancelled'])
+const SERVICE_REQUEST_TYPES = new Set(['waiter', 'bill', 'cash_payment'])
+const SERVICE_REQUEST_STATUSES = new Set(['open', 'acknowledged', 'resolved'])
+const eventClients = new Set()
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required for the Render backend.')
@@ -22,6 +25,13 @@ function getCorsHeaders(origin) {
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
     Vary: 'Origin',
+  }
+}
+
+function broadcastUpdate(payload = { type: 'update' }) {
+  const body = `event: dineflow-update\ndata: ${JSON.stringify(payload)}\n\n`
+  for (const client of eventClients) {
+    client.write(body)
   }
 }
 
@@ -79,6 +89,10 @@ function verifyPassword(password, passwordHash) {
   return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 
+function hashPin(pin) {
+  return sha256(`dineflow-pin:${pin}`)
+}
+
 function buildSetCookie(token) {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
   if (!token) {
@@ -117,6 +131,32 @@ function mapOrderRow(row) {
       quantity: Number(item.quantity),
       note: item.note ?? undefined,
     })),
+  }
+}
+
+function mapServiceRequestRow(row) {
+  return {
+    id: row.id,
+    tableId: row.table_id,
+    tableLabel: row.table_label,
+    type: row.type,
+    status: row.status,
+    message: row.message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function mapSplitPaymentRow(row) {
+  const itemKeys = Array.isArray(row.item_keys) ? row.item_keys : typeof row.item_keys === 'string' ? JSON.parse(row.item_keys) : []
+  return {
+    id: row.id,
+    tableId: row.table_id,
+    payerName: row.payer_name,
+    amount: Number(row.amount),
+    method: row.method,
+    itemKeys,
+    createdAt: row.created_at,
   }
 }
 
@@ -195,7 +235,7 @@ async function getOrdersForTable(eateryId, tableId) {
 
 async function getMenuForEatery(eateryId) {
   const rows = await sql`
-    select id, name, category, description, price, available, prep_minutes
+    select id, name, category, description, price, available, prep_minutes, stock_count, low_stock_threshold
     from menu_items
     where eatery_id = ${eateryId}
     order by category asc, name asc
@@ -209,12 +249,14 @@ async function getMenuForEatery(eateryId) {
     price: Number(row.price),
     available: row.available,
     prepMinutes: row.prep_minutes,
+    stockCount: row.stock_count === null || row.stock_count === undefined ? undefined : row.stock_count,
+    lowStockThreshold: row.low_stock_threshold,
   }))
 }
 
 async function getTablesForEatery(eateryId) {
   const rows = await sql`
-    select id, label, seats
+    select id, label, seats, floor_x, floor_y
     from eatery_tables
     where eatery_id = ${eateryId}
       and active = true
@@ -225,7 +267,35 @@ async function getTablesForEatery(eateryId) {
     id: row.id,
     label: row.label,
     seats: row.seats,
+    floorX: row.floor_x,
+    floorY: row.floor_y,
   }))
+}
+
+async function getServiceRequestsForEatery(eateryId) {
+  const rows = await sql`
+    select sr.id, sr.table_id, t.label as table_label, sr.type, sr.status, sr.message, sr.created_at, sr.updated_at
+    from service_requests sr
+    join eatery_tables t on t.id = sr.table_id
+    where sr.eatery_id = ${eateryId}
+      and sr.status <> 'resolved'
+    order by sr.created_at desc
+    limit 80
+  `
+
+  return rows.map(mapServiceRequestRow)
+}
+
+async function getSplitPaymentsForEatery(eateryId) {
+  const rows = await sql`
+    select id, table_id, payer_name, amount, method, item_keys, created_at
+    from split_payments
+    where eatery_id = ${eateryId}
+    order by created_at desc
+    limit 150
+  `
+
+  return rows.map(mapSplitPaymentRow)
 }
 
 async function getSessionContext(request) {
@@ -288,10 +358,12 @@ async function handleBootstrap(request, response, url, origin) {
   }
 
   const session = await getSessionContext(request)
-  const [menu, tables, orders] = await Promise.all([
+  const [menu, tables, orders, serviceRequests, splitPayments] = await Promise.all([
     getMenuForEatery(eatery.id),
     getTablesForEatery(eatery.id),
     session && session.eatery_id === eatery.id ? getOrdersForEatery(eatery.id) : Promise.resolve([]),
+    session && session.eatery_id === eatery.id ? getServiceRequestsForEatery(eatery.id) : Promise.resolve([]),
+    session && session.eatery_id === eatery.id ? getSplitPaymentsForEatery(eatery.id) : Promise.resolve([]),
   ])
 
   sendJson(
@@ -301,7 +373,7 @@ async function handleBootstrap(request, response, url, origin) {
       eatery,
       session: session ? { email: session.email } : null,
       staffProfile: session && session.eatery_id === eatery.id ? { eateryId: session.eatery_id, role: session.role } : null,
-      store: { menu, tables, orders },
+      store: { menu, tables, orders, serviceRequests, splitPayments },
     },
     origin,
   )
@@ -371,6 +443,50 @@ async function handleLogin(request, response, origin) {
   sendJson(response, 200, { ok: true, message: 'Signed in.' }, origin)
 }
 
+async function handlePinLogin(request, response, origin) {
+  const body = await readBody(request)
+  const slug = String(body?.slug || '').trim()
+  const pin = String(body?.pin || '').trim()
+
+  if (!slug || !/^\d{4}$/.test(pin)) {
+    sendJson(response, 400, { error: 'slug and a 4-digit pin are required.' }, origin)
+    return
+  }
+
+  const eatery = await getEateryBySlug(slug)
+  if (!eatery) {
+    sendJson(response, 404, { error: 'Eatery not found.' }, origin)
+    return
+  }
+
+  const rows = await sql`
+    select id, eatery_id, email, role
+    from staff_members
+    where eatery_id = ${eatery.id}
+      and pin_hash = ${hashPin(pin)}
+      and active = true
+    limit 1
+  `
+
+  const staffMember = rows[0]
+  if (!staffMember) {
+    sendJson(response, 401, { error: 'Invalid staff pin.' }, origin)
+    return
+  }
+
+  const rawToken = `${Date.now()}-${Math.random()}-${staffMember.id}`
+  const sessionToken = sha256(rawToken)
+  const tokenHash = sha256(sessionToken)
+
+  await sql`
+    insert into staff_sessions (staff_member_id, token_hash, expires_at)
+    values (${staffMember.id}, ${tokenHash}, now() + interval '12 hours')
+  `
+
+  response.setHeader('Set-Cookie', buildSetCookie(sessionToken))
+  sendJson(response, 200, { ok: true, message: 'PIN accepted.' }, origin)
+}
+
 async function handleLogout(request, response, origin) {
   const cookies = parseCookies(request.headers.cookie || '')
   const token = cookies[SESSION_COOKIE_NAME]
@@ -436,9 +552,10 @@ async function handleCreateOrder(request, response, origin) {
     }
   }
 
+  const orderStatus = body?.tabMode ? 'open_tab' : 'received'
   const orderRows = await sql`
     insert into orders (eatery_id, table_id, customer_name, status, note)
-    values (${eatery.id}, ${tableId}, ${customerName}, 'received', ${note || null})
+    values (${eatery.id}, ${tableId}, ${customerName}, ${orderStatus}, ${note || null})
     returning id
   `
 
@@ -458,6 +575,7 @@ async function handleCreateOrder(request, response, origin) {
     `
   }
 
+  broadcastUpdate({ type: 'order-created', tableId, orderId })
   sendJson(response, 201, { orderId }, origin)
 }
 
@@ -481,7 +599,101 @@ async function handleUpdateOrderStatus(request, response, orderId, origin) {
       and eatery_id = ${context.eatery.id}
   `
 
+  broadcastUpdate({ type: 'order-status', orderId, status })
   sendJson(response, 200, { ok: true }, origin)
+}
+
+async function handleCreateServiceRequest(request, response, origin) {
+  const body = await readBody(request)
+  const slug = String(body?.slug || '').trim()
+  const tableId = String(body?.tableId || '').trim()
+  const type = String(body?.type || '').trim()
+  const message = String(body?.message || '').trim()
+
+  if (!slug || !tableId || !SERVICE_REQUEST_TYPES.has(type)) {
+    sendJson(response, 400, { error: 'Valid slug, tableId and request type are required.' }, origin)
+    return
+  }
+
+  const eatery = await getEateryBySlug(slug)
+  if (!eatery) {
+    sendJson(response, 404, { error: 'Eatery not found.' }, origin)
+    return
+  }
+
+  const tableRows = await sql`
+    select id from eatery_tables
+    where id = ${tableId} and eatery_id = ${eatery.id} and active = true
+    limit 1
+  `
+
+  if (tableRows.length === 0) {
+    sendJson(response, 400, { error: 'Selected table is invalid.' }, origin)
+    return
+  }
+
+  const rows = await sql`
+    insert into service_requests (eatery_id, table_id, type, status, message)
+    values (${eatery.id}, ${tableId}, ${type}, 'open', ${message || null})
+    returning id
+  `
+
+  broadcastUpdate({ type: 'service-request', tableId, requestType: type })
+  sendJson(response, 201, { ok: true, id: rows[0].id }, origin)
+}
+
+async function handleUpdateServiceRequestStatus(request, response, requestId, origin) {
+  const body = await readBody(request)
+  const slug = String(body?.slug || '').trim()
+  const status = String(body?.status || '').trim()
+
+  if (!slug || !SERVICE_REQUEST_STATUSES.has(status)) {
+    sendJson(response, 400, { error: 'Valid slug and status are required.' }, origin)
+    return
+  }
+
+  const context = await requireStaff(request, response, slug, ['owner', 'admin', 'kitchen', 'waiter'], origin)
+  if (!context) return
+
+  await sql`
+    update service_requests
+    set status = ${status}, updated_at = now()
+    where id = ${requestId}
+      and eatery_id = ${context.eatery.id}
+  `
+
+  broadcastUpdate({ type: 'service-request-status', requestId, status })
+  sendJson(response, 200, { ok: true }, origin)
+}
+
+async function handleCreateSplitPayment(request, response, origin) {
+  const body = await readBody(request)
+  const slug = String(body?.slug || '').trim()
+  const tableId = String(body?.tableId || '').trim()
+  const payerName = String(body?.payerName || 'Guest').trim() || 'Guest'
+  const amount = Number(body?.amount)
+  const method = String(body?.method || 'cash').trim() || 'cash'
+  const itemKeys = Array.isArray(body?.itemKeys) ? body.itemKeys.map((item) => String(item)) : []
+
+  if (!slug || !tableId || Number.isNaN(amount) || amount < 0) {
+    sendJson(response, 400, { error: 'Valid slug, tableId and amount are required.' }, origin)
+    return
+  }
+
+  const eatery = await getEateryBySlug(slug)
+  if (!eatery) {
+    sendJson(response, 404, { error: 'Eatery not found.' }, origin)
+    return
+  }
+
+  const rows = await sql`
+    insert into split_payments (eatery_id, table_id, payer_name, amount, method, item_keys)
+    values (${eatery.id}, ${tableId}, ${payerName}, ${amount}, ${method}, ${JSON.stringify(itemKeys)}::jsonb)
+    returning id
+  `
+
+  broadcastUpdate({ type: 'split-payment', tableId })
+  sendJson(response, 201, { ok: true, id: rows[0].id }, origin)
 }
 
 async function handleCreateMenuItem(request, response, origin) {
@@ -563,6 +775,24 @@ async function handleCreateTable(request, response, origin) {
   sendJson(response, 201, { ok: true, id: rows[0].id }, origin)
 }
 
+async function handleEvents(response, url, origin) {
+  const slug = String(url.searchParams.get('slug') || '').trim()
+  if (!slug) {
+    sendJson(response, 400, { error: 'slug is required.' }, origin)
+    return
+  }
+
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    ...getCorsHeaders(origin),
+  })
+  response.write(`event: dineflow-update\ndata: ${JSON.stringify({ type: 'connected' })}\n\n`)
+  eventClients.add(response)
+  response.on('close', () => eventClients.delete(response))
+}
+
 const server = http.createServer(async (request, response) => {
   const origin = String(request.headers.origin || '')
 
@@ -595,8 +825,18 @@ const server = http.createServer(async (request, response) => {
       return
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/events') {
+      await handleEvents(response, url, origin)
+      return
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/staff/login') {
       await handleLogin(request, response, origin)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/staff/pin-login') {
+      await handlePinLogin(request, response, origin)
       return
     }
 
@@ -613,6 +853,22 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'PATCH' && /^\/api\/orders\/[^/]+\/status$/.test(url.pathname)) {
       const orderId = url.pathname.split('/')[3]
       await handleUpdateOrderStatus(request, response, orderId, origin)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/service-requests') {
+      await handleCreateServiceRequest(request, response, origin)
+      return
+    }
+
+    if (request.method === 'PATCH' && /^\/api\/service-requests\/[^/]+\/status$/.test(url.pathname)) {
+      const requestId = url.pathname.split('/')[3]
+      await handleUpdateServiceRequestStatus(request, response, requestId, origin)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/split-payments') {
+      await handleCreateSplitPayment(request, response, origin)
       return
     }
 
