@@ -152,13 +152,13 @@ execute function set_updated_at();
 drop trigger if exists trg_orders_updated_at on orders;
 create trigger trg_orders_updated_at
 before update on orders
+for each row
+execute function set_updated_at();
 
 drop trigger if exists set_service_requests_updated_at on service_requests;
 create trigger set_service_requests_updated_at
 before update on service_requests
 for each row execute function set_updated_at();
-for each row
-execute function set_updated_at();
 
 drop trigger if exists trg_staff_members_updated_at on staff_members;
 create trigger trg_staff_members_updated_at
