@@ -65,7 +65,11 @@ create table if not exists orders (
   status order_status not null default 'received',
   note text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  received_at timestamptz not null default now(),
+  preparing_at timestamptz,
+  ready_at timestamptz,
+  served_at timestamptz
 );
 
 create table if not exists order_items (

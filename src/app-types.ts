@@ -1,4 +1,4 @@
-export type View = 'customer' | 'kitchen' | 'admin'
+export type View = 'customer' | 'kitchen' | 'floor' | 'admin'
 export type OrderStatus = 'open_tab' | 'received' | 'preparing' | 'ready' | 'served' | 'cancelled'
 export type StaffRole = 'owner' | 'admin' | 'kitchen' | 'waiter'
 export type AppMode = 'demo' | 'api'
@@ -43,6 +43,10 @@ export type Order = {
   note?: string
   createdAt: string
   updatedAt: string
+  receivedAt?: string
+  preparingAt?: string
+  readyAt?: string
+  servedAt?: string
 }
 
 export type ServiceRequest = {

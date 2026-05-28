@@ -89,6 +89,8 @@ export const initialStore: Store = {
       note: 'Less pepper on one plate.',
       createdAt: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
       updatedAt: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
+      receivedAt: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
+      preparingAt: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
     },
   ],
   serviceRequests: [],
@@ -120,10 +122,11 @@ export function loadDemoStore(): Store {
 export function getInitialView(): View {
   const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
   if (normalizedPath === '/kitchen') return 'kitchen'
+  if (normalizedPath === '/floor') return 'floor'
   if (normalizedPath === '/admin') return 'admin'
 
   const queryValue = new URLSearchParams(window.location.search).get('view')
-  if (queryValue === 'customer' || queryValue === 'kitchen' || queryValue === 'admin') {
+  if (queryValue === 'customer' || queryValue === 'kitchen' || queryValue === 'floor' || queryValue === 'admin') {
     return queryValue
   }
 

@@ -124,6 +124,10 @@ function mapOrderRow(row) {
     note: row.note ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    receivedAt: row.received_at ?? undefined,
+    preparingAt: row.preparing_at ?? undefined,
+    readyAt: row.ready_at ?? undefined,
+    servedAt: row.served_at ?? undefined,
     items: items.map((item) => ({
       menuItemId: item.menu_item_id,
       name: item.item_name,
@@ -171,6 +175,10 @@ async function getOrdersForEatery(eateryId) {
       o.note,
       o.created_at,
       o.updated_at,
+      o.received_at,
+      o.preparing_at,
+      o.ready_at,
+      o.served_at,
       coalesce(
         json_agg(
           json_build_object(
@@ -207,6 +215,10 @@ async function getOrdersForTable(eateryId, tableId) {
       o.note,
       o.created_at,
       o.updated_at,
+      o.received_at,
+      o.preparing_at,
+      o.ready_at,
+      o.served_at,
       coalesce(
         json_agg(
           json_build_object(
@@ -552,10 +564,9 @@ async function handleCreateOrder(request, response, origin) {
     }
   }
 
-  const orderStatus = body?.tabMode ? 'open_tab' : 'received'
   const orderRows = await sql`
     insert into orders (eatery_id, table_id, customer_name, status, note)
-    values (${eatery.id}, ${tableId}, ${customerName}, ${orderStatus}, ${note || null})
+    values (${eatery.id}, ${tableId}, ${customerName}, 'received', ${note || null})
     returning id
   `
 
@@ -592,9 +603,18 @@ async function handleUpdateOrderStatus(request, response, orderId, origin) {
   const context = await requireStaff(request, response, slug, ['owner', 'admin', 'kitchen', 'waiter'], origin)
   if (!context) return
 
+  const preparingAt = status === 'preparing' ? new Date().toISOString() : null
+  const readyAt = status === 'ready' ? new Date().toISOString() : null
+  const servedAt = status === 'served' ? new Date().toISOString() : null
+
   await sql`
     update orders
-    set status = ${status}, updated_at = now()
+    set
+      status = ${status},
+      updated_at = now(),
+      preparing_at = case when ${preparingAt}::timestamptz is not null then ${preparingAt}::timestamptz else preparing_at end,
+      ready_at = case when ${readyAt}::timestamptz is not null then ${readyAt}::timestamptz else ready_at end,
+      served_at = case when ${servedAt}::timestamptz is not null then ${servedAt}::timestamptz else served_at end
     where id = ${orderId}
       and eatery_id = ${context.eatery.id}
   `

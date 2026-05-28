@@ -393,10 +393,54 @@ label {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.kds-filter-row,
+.floor-service-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.kds-filter-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.kds-filter-row button.active {
+  background: #ea580c;
+  color: #fff;
+}
+
+.floor-service-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .order-card {
   display: grid;
   gap: 16px;
   border-top: 8px solid #ea580c;
+}
+
+.kds-ticket-card {
+  min-height: 320px;
+}
+
+.kds-action-button {
+  min-height: 54px;
+  padding: 1rem 1.15rem;
+  font-size: 1rem;
+}
+
+.primary-kds-action {
+  background: #16a34a;
+}
+
+.urgency-label {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 6px 10px;
 }
 
 .status-preparing {
@@ -663,6 +707,8 @@ code {
   .content-grid,
   .admin-grid,
   .order-board,
+  .floor-service-grid,
+  .kds-filter-row,
   .menu-list,
   .customer-meta-grid,
   .confirmation-grid {

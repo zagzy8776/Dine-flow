@@ -41,7 +41,9 @@ const roleLabels: Record<StaffRole, string> = {
   waiter: 'Waiter',
 }
 
-const statusFlow: OrderStatus[] = ['open_tab', 'received', 'preparing', 'ready', 'served']
+const statusFlow: OrderStatus[] = ['received', 'preparing', 'ready', 'served']
+const kitchenStatuses: OrderStatus[] = ['received', 'preparing', 'ready']
+const kitchenFilterOptions: Array<'all' | OrderStatus | 'urgent'> = ['all', 'received', 'preparing', 'ready', 'urgent']
 const staffViewRoles: StaffRole[] = ['owner', 'admin', 'kitchen', 'waiter']
 const managementRoles: StaffRole[] = ['owner', 'admin']
 const recommendedServicePoints = [
@@ -95,6 +97,44 @@ function getKdsAgeClass(createdAt: string) {
   if (minutes >= 20) return 'age-danger'
   if (minutes >= 10) return 'age-warning'
   return 'age-ok'
+}
+
+function getStageStartedAt(order: Order) {
+  if (order.status === 'served') return order.servedAt ?? order.updatedAt
+  if (order.status === 'ready') return order.readyAt ?? order.updatedAt
+  if (order.status === 'preparing') return order.preparingAt ?? order.updatedAt
+  return order.receivedAt ?? order.createdAt
+}
+
+function getMinutesSince(isoDate: string) {
+  const timestamp = new Date(isoDate).getTime()
+  if (Number.isNaN(timestamp)) return 0
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+}
+
+function getUrgencyLabel(order: Order) {
+  const minutes = getMinutesSince(getStageStartedAt(order))
+  if (minutes >= 20) return `Urgent • ${minutes} min in ${statusLabels[order.status].toLowerCase()}`
+  if (minutes >= 10) return `Delayed • ${minutes} min in ${statusLabels[order.status].toLowerCase()}`
+  return `${minutes} min in ${statusLabels[order.status].toLowerCase()}`
+}
+
+function playKitchenPing() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext
+    if (!AudioContextClass) return
+    const audioContext = new AudioContextClass()
+    const oscillator = audioContext.createOscillator()
+    const gain = audioContext.createGain()
+    oscillator.frequency.value = 880
+    gain.gain.value = 0.05
+    oscillator.connect(gain)
+    gain.connect(audioContext.destination)
+    oscillator.start()
+    oscillator.stop(audioContext.currentTime + 0.16)
+  } catch {
+    // Ignore browsers that block notification audio until user interaction.
+  }
 }
 
 function getQrImageUrl(link: string) {
@@ -213,6 +253,7 @@ function buildTableLink(tableId: string) {
 
 function getPathForView(view: View) {
   if (view === 'kitchen') return '/kitchen'
+  if (view === 'floor') return '/floor'
   if (view === 'admin') return '/admin'
   return '/'
 }
@@ -245,6 +286,8 @@ function App() {
   const [splitPeople, setSplitPeople] = useState('2')
   const [splitItemKeys, setSplitItemKeys] = useState<string[]>([])
   const [payerName, setPayerName] = useState('Guest')
+  const [kitchenFilter, setKitchenFilter] = useState<'all' | OrderStatus | 'urgent'>('all')
+  const [lastKitchenOrderCount, setLastKitchenOrderCount] = useState(0)
   const [menuForm, setMenuForm] = useState({
     name: '',
     category: '',
@@ -386,6 +429,27 @@ function App() {
     () => store.orders.filter((order) => !['served', 'cancelled'].includes(order.status)),
     [store.orders],
   )
+  const kitchenOrders = useMemo(
+    () => activeOrders.filter((order) => kitchenStatuses.includes(order.status)),
+    [activeOrders],
+  )
+  const filteredKitchenOrders = useMemo(() => {
+    if (kitchenFilter === 'all') return kitchenOrders
+    if (kitchenFilter === 'urgent') return kitchenOrders.filter((order) => getMinutesSince(getStageStartedAt(order)) >= 20)
+    return kitchenOrders.filter((order) => order.status === kitchenFilter)
+  }, [kitchenFilter, kitchenOrders])
+  useEffect(() => {
+    if (view !== 'kitchen') {
+      setLastKitchenOrderCount(kitchenOrders.length)
+      return
+    }
+
+    if (lastKitchenOrderCount > 0 && kitchenOrders.length > lastKitchenOrderCount) {
+      playKitchenPing()
+    }
+
+    setLastKitchenOrderCount(kitchenOrders.length)
+  }, [kitchenOrders.length, lastKitchenOrderCount, view])
   const completedOrders = useMemo(
     () => store.orders.filter((order) => ['served', 'cancelled'].includes(order.status)),
     [store.orders],
@@ -570,7 +634,6 @@ function App() {
           tableId: activeTable.id,
           customerName: customerNameValue || 'Guest',
           note: guestOrderNote || undefined,
-          tabMode: fulfillmentMode === 'dine-in',
           items: cartItems.map(({ menuItem, quantity, note }) => ({
             menuItemId: menuItem.id,
             quantity,
@@ -615,10 +678,11 @@ function App() {
         quantity,
         note: note.trim() || undefined,
       })),
-      status: fulfillmentMode === 'dine-in' ? 'open_tab' : 'received',
+      status: 'received',
       note: guestOrderNote || undefined,
       createdAt: now,
       updatedAt: now,
+      receivedAt: now,
     }
 
     setStore((current) => ({ ...current, orders: [order, ...current.orders] }))
@@ -1366,29 +1430,6 @@ function App() {
 
     return (
       <section className="content-stack">
-        {store.serviceRequests.filter((request) => request.status !== 'resolved').length > 0 ? (
-          <section className="panel service-alert-panel">
-            <div className="section-title">
-              <div>
-                <span className="eyebrow">Floor alerts</span>
-                <h2>Waiter and bill requests</h2>
-              </div>
-            </div>
-            <div className="service-request-list">
-              {store.serviceRequests.filter((request) => request.status !== 'resolved').map((request) => (
-                <article key={request.id} className="service-request-card">
-                  <strong>{request.tableLabel}</strong>
-                  <span>{request.type === 'waiter' ? 'Needs waiter' : 'Wants bill / payment'} • {formatRelativeTime(request.createdAt)}</span>
-                  <p>{request.message}</p>
-                  <div className="order-actions">
-                    {request.status === 'open' ? <button type="button" onClick={() => void resolveServiceRequest(request.id, 'acknowledged')}>Acknowledge</button> : null}
-                    <button type="button" onClick={() => void resolveServiceRequest(request.id, 'resolved')}>Resolve</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
         <section className="panel">
           <div className="section-title">
             <div>
@@ -1396,22 +1437,36 @@ function App() {
               <h2>Active tickets</h2>
               <p>Move tickets from received to served, or cancel when needed.</p>
             </div>
-            <strong>{activeOrders.length} active</strong>
+            <strong>{kitchenOrders.length} kitchen ticket{activeOrders.length === 1 ? '' : 's'}</strong>
+          </div>
+
+          <div className="kds-filter-row">
+            {kitchenFilterOptions.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                className={kitchenFilter === filter ? 'active' : ''}
+                onClick={() => setKitchenFilter(filter)}
+              >
+                {filter === 'all' ? 'All' : filter === 'urgent' ? 'Urgent' : statusLabels[filter]}
+              </button>
+            ))}
           </div>
 
           <div className="order-board">
-            {activeOrders.map((order) => {
+            {filteredKitchenOrders.map((order) => {
               const currentStatusIndex = statusFlow.indexOf(order.status)
               const nextStatus = currentStatusIndex === -1 ? undefined : statusFlow[currentStatusIndex + 1]
 
               return (
-                <article key={order.id} className={`panel order-card ${getStatusClass(order.status)} ${getKdsAgeClass(order.createdAt)}`}>
+                <article key={order.id} className={`panel order-card kds-ticket-card ${getStatusClass(order.status)} ${getKdsAgeClass(getStageStartedAt(order))}`}>
                   <div className="order-head">
                     <div>
                       <h3>{order.tableLabel}</h3>
                       <span>
                         {shortOrderId(order.id)} • {order.customerName} • {formatRelativeTime(order.createdAt)}
                       </span>
+                      <strong className="urgency-label">{getUrgencyLabel(order)}</strong>
                     </div>
                     <span className="status-pill">{statusLabels[order.status]}</span>
                   </div>
@@ -1433,11 +1488,11 @@ function App() {
                   </div>
 
                   <div className="order-actions">
-                    <button type="button" className="secondary-button" onClick={() => window.alert(buildEscPosPreview(order))}>
+                    <button type="button" className="secondary-button kds-action-button" onClick={() => window.alert(buildEscPosPreview(order))}>
                       ESC/POS preview
                     </button>
                     {nextStatus ? (
-                      <button type="button" onClick={() => void advanceOrderStatus(order.id, nextStatus)}>
+                      <button type="button" className="kds-action-button primary-kds-action" onClick={() => void advanceOrderStatus(order.id, nextStatus)}>
                         Mark as {statusLabels[nextStatus]}
                       </button>
                     ) : null}
@@ -1445,7 +1500,7 @@ function App() {
                     {order.status !== 'cancelled' && order.status !== 'served' ? (
                       <button
                         type="button"
-                        className="ghost-danger"
+                        className="ghost-danger kds-action-button"
                         onClick={() => void advanceOrderStatus(order.id, 'cancelled')}
                       >
                         Cancel order
@@ -1456,7 +1511,7 @@ function App() {
               )
             })}
 
-            {activeOrders.length === 0 ? <p className="empty">No active orders right now.</p> : null}
+            {filteredKitchenOrders.length === 0 ? <p className="empty">No kitchen tickets match this filter right now.</p> : null}
           </div>
         </section>
 
@@ -1490,6 +1545,80 @@ function App() {
             )}
           </div>
         </details>
+      </section>
+    )
+  }
+
+  function renderFloorView() {
+    if (!canUseKitchen) {
+      return (
+        <section className="panel">
+          <span className="eyebrow">Floor access</span>
+          <h2>Staff sign-in required</h2>
+          <p>Open the Admin view and sign in with a staff account that has waiter, admin, owner, or kitchen access.</p>
+        </section>
+      )
+    }
+
+    const openRequests = store.serviceRequests.filter((request) => request.status !== 'resolved')
+    const tableSummaries = store.tables
+      .filter((table) => !isOffsiteOrderingPoint(table.label))
+      .map((table) => {
+        const tableOrders = activeOrders.filter((order) => order.tableId === table.id)
+        const tableRequests = openRequests.filter((request) => request.tableId === table.id)
+        return {
+          table,
+          orders: tableOrders,
+          requests: tableRequests,
+          total: tableOrders.reduce((sum, order) => sum + getOrderTotal(order), 0),
+        }
+      })
+
+    return (
+      <section className="content-stack">
+        <section className="panel service-alert-panel">
+          <div className="section-title">
+            <div>
+              <span className="eyebrow">Floor dashboard</span>
+              <h2>Waiter and bill requests</h2>
+              <p>Keep customer service separate from kitchen production.</p>
+            </div>
+            <strong>{openRequests.length} open</strong>
+          </div>
+          <div className="service-request-list">
+            {openRequests.map((request) => (
+              <article key={request.id} className="service-request-card">
+                <strong>{request.tableLabel}</strong>
+                <span>{request.type === 'waiter' ? 'Needs waiter' : 'Wants bill / payment'} • {formatRelativeTime(request.createdAt)}</span>
+                <p>{request.message}</p>
+                <div className="order-actions">
+                  {request.status === 'open' ? <button type="button" onClick={() => void resolveServiceRequest(request.id, 'acknowledged')}>Acknowledge</button> : null}
+                  <button type="button" onClick={() => void resolveServiceRequest(request.id, 'resolved')}>Resolve</button>
+                </div>
+              </article>
+            ))}
+            {openRequests.length === 0 ? <p className="empty">No open floor requests right now.</p> : null}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="section-title">
+            <div>
+              <span className="eyebrow">Table service</span>
+              <h2>Active table overview</h2>
+            </div>
+          </div>
+          <div className="floor-service-grid">
+            {tableSummaries.map(({ table, orders, requests, total }) => (
+              <article key={table.id} className="service-request-card">
+                <strong>{table.label}</strong>
+                <span>{orders.length} active ticket{orders.length === 1 ? '' : 's'} • {requests.length} request{requests.length === 1 ? '' : 's'}</span>
+                <p>Running total: {formatCurrency(total)}</p>
+                <button type="button" onClick={() => setSelectedTableId(table.id)}>Open table link</button>
+              </article>
+            ))}
+          </div>
+        </section>
       </section>
     )
   }
@@ -1903,6 +2032,9 @@ function App() {
               <button type="button" className={view === 'kitchen' ? 'active' : ''} onClick={() => setView('kitchen')}>
                 Kitchen
               </button>
+              <button type="button" className={view === 'floor' ? 'active' : ''} onClick={() => setView('floor')}>
+                Floor
+              </button>
               <button type="button" className={view === 'admin' ? 'active' : ''} onClick={() => setView('admin')}>
                 Admin
               </button>
@@ -1946,6 +2078,7 @@ function App() {
 
       {!isLoading && view === 'customer' ? renderCustomerView() : null}
       {!isLoading && view === 'kitchen' ? renderKitchenView() : null}
+      {!isLoading && view === 'floor' ? renderFloorView() : null}
       {!isLoading && view === 'admin' ? renderAdminView() : null}
     </main>
   )

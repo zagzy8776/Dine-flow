@@ -19,6 +19,10 @@ alter table menu_items add column if not exists low_stock_threshold integer not 
 alter table eatery_tables add column if not exists floor_x integer not null default 0;
 alter table eatery_tables add column if not exists floor_y integer not null default 0;
 alter table staff_members add column if not exists pin_hash text;
+alter table orders add column if not exists received_at timestamptz not null default now();
+alter table orders add column if not exists preparing_at timestamptz;
+alter table orders add column if not exists ready_at timestamptz;
+alter table orders add column if not exists served_at timestamptz;
 
 create table if not exists service_requests (
   id uuid primary key default gen_random_uuid(),
